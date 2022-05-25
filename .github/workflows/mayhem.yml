@@ -51,13 +51,13 @@ jobs:
         uses: ForAllSecure/mcode-action@v1
         with:
           mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.ROUNDTRIP }}
+          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.ROUNDTRIP }} --duration 600
           sarif-output: sarif
 
       - name: Start analysis for DECODE
         uses: ForAllSecure/mcode-action@v1
         with:
           mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.DECODE }}
+          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.DECODE }} --duration 600
           sarif-output: sarif
 
