@@ -1,0 +1,5 @@
+project: jsonwebtoken
+target: roundtrip
+
+cmds:
+  - cmd: /roundtrip

@@ -1,0 +1,5 @@
+project: jsonwebtoken
+target: decode
+
+cmds:
+  - cmd: /decode
