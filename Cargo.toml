@@ -20,6 +20,8 @@ base64 = "0.21.0"
 # For PEM decoding
 pem = {version = "1", optional = true}
 simple_asn1 = {version = "0.6", optional = true}
+# For fuzzing
+arbitrary = {version = "1", optional = true}
 
 [dev-dependencies]
 # For the custom time example
@@ -29,6 +31,7 @@ criterion = "0.4"
 [features]
 default = ["use_pem"]
 use_pem = ["pem", "simple_asn1"]
+arbitrary = ["arbitrary/derive"]
 
 [[bench]]
 name = "jwt"

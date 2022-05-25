@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub(crate) enum AlgorithmFamily {
     Hmac,
     Rsa,
@@ -13,6 +14,7 @@ pub(crate) enum AlgorithmFamily {
 /// The algorithms supported for signing/verifying JWTs
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Algorithm {
     /// HMAC using SHA-256
     HS256,

@@ -26,7 +26,8 @@ use crate::errors::{new_error, ErrorKind, Result};
 /// validation.set_issuer(&["Me"]); // a single string
 /// validation.set_issuer(&["Me", "You"]); // array of strings
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Validation {
     /// Which claims are required to be present before starting the validation.
     /// This does not interact with the various `validate_*`. If you remove `exp` from that list, you still need
