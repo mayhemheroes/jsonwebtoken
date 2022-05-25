@@ -1,48 +1,22 @@
+use crate::errors::{Error, ErrorKind, Result};
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
-
-use crate::errors::{Error, ErrorKind, Result};
-
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Serialize, Deserialize)]
-/// Supported families of algorithms.
-pub enum AlgorithmFamily {
-    /// HMAC shared secret family.
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub(crate) enum AlgorithmFamily {
     Hmac,
-    /// RSA-based public key family.
     Rsa,
-    /// Elliptic curve public key family.
     Ec,
-    /// Edwards curve public key family.
     Ed,
-}
-
-impl AlgorithmFamily {
-    /// A list of all possible Algorithms that are part of the family.
-    pub fn algorithms(&self) -> &[Algorithm] {
-        match self {
-            Self::Hmac => &[Algorithm::HS256, Algorithm::HS384, Algorithm::HS512],
-            Self::Rsa => &[
-                Algorithm::RS256,
-                Algorithm::RS384,
-                Algorithm::RS512,
-                Algorithm::PS256,
-                Algorithm::PS384,
-                Algorithm::PS512,
-            ],
-            Self::Ec => &[Algorithm::ES256, Algorithm::ES384],
-            Self::Ed => &[Algorithm::EdDSA],
-        }
-    }
 }
 
 /// The algorithms supported for signing/verifying JWTs
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Debug, Default, PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
-#[non_exhaustive]
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Algorithm {
     /// HMAC using SHA-256
-    #[default]
     HS256,
     /// HMAC using SHA-384
     HS384,
@@ -72,6 +46,12 @@ pub enum Algorithm {
     EdDSA,
 }
 
+impl Default for Algorithm {
+    fn default() -> Self {
+        Algorithm::HS256
+    }
+}
+
 impl FromStr for Algorithm {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self> {
@@ -94,8 +74,7 @@ impl FromStr for Algorithm {
 }
 
 impl Algorithm {
-    /// The family of the algorithm.
-    pub fn family(self) -> AlgorithmFamily {
+    pub(crate) fn family(self) -> AlgorithmFamily {
         match self {
             Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => AlgorithmFamily::Hmac,
             Algorithm::RS256
@@ -112,12 +91,9 @@ impl Algorithm {
 
 #[cfg(test)]
 mod tests {
-    use wasm_bindgen_test::wasm_bindgen_test;
-
     use super::*;
 
     #[test]
-    #[wasm_bindgen_test]
     fn generate_algorithm_enum_from_str() {
         assert!(Algorithm::from_str("HS256").is_ok());
         assert!(Algorithm::from_str("HS384").is_ok());

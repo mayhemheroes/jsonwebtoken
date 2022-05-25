@@ -1,35 +1,24 @@
-use std::fmt::{Debug, Formatter};
-
-use base64::{
-    Engine,
-    engine::general_purpose::{STANDARD, URL_SAFE},
-};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::ser::Serialize;
-use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::algorithms::AlgorithmFamily;
-use crate::crypto::CryptoProvider;
-use crate::errors::{ErrorKind, Result, new_error};
+use crate::crypto;
+use crate::errors::{new_error, ErrorKind, Result};
 use crate::header::Header;
 #[cfg(feature = "use_pem")]
 use crate::pem::decoder::PemEncodedKey;
-use crate::serialization::{b64_encode, b64_encode_part};
+use crate::serialization::b64_encode_part;
 
 /// A key to encode a JWT with. Can be a secret, a PEM-encoded key or a DER-encoded key.
 /// This key can be re-used so make sure you only initialize it once if you can for better performance.
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary, Debug))]
 pub struct EncodingKey {
-    #[zeroize(skip)]
-    family: AlgorithmFamily,
+    pub(crate) family: AlgorithmFamily,
     content: Vec<u8>,
 }
 
 impl EncodingKey {
-    /// The algorithm family this key is for.
-    pub fn family(&self) -> AlgorithmFamily {
-        self.family
-    }
-
     /// If you're using a HMAC secret that is not base64, use that.
     pub fn from_secret(secret: &[u8]) -> Self {
         EncodingKey { family: AlgorithmFamily::Hmac, content: secret.to_vec() }
@@ -38,12 +27,6 @@ impl EncodingKey {
     /// If you have a base64 HMAC secret, use that.
     pub fn from_base64_secret(secret: &str) -> Result<Self> {
         let out = STANDARD.decode(secret)?;
-        Ok(EncodingKey { family: AlgorithmFamily::Hmac, content: out })
-    }
-
-    /// For loading websafe base64 HMAC secrets, ex: ACME EAB credentials.
-    pub fn from_urlsafe_base64_secret(secret: &str) -> Result<Self> {
-        let out = URL_SAFE.decode(secret)?;
         Ok(EncodingKey { family: AlgorithmFamily::Hmac, content: out })
     }
 
@@ -109,27 +92,8 @@ impl EncodingKey {
         EncodingKey { family: AlgorithmFamily::Ed, content: der.to_vec() }
     }
 
-    /// Get the value of the key.
-    pub fn inner(&self) -> &[u8] {
+    pub(crate) fn inner(&self) -> &[u8] {
         &self.content
-    }
-
-    /// Try to get the HMAC secret from a key.
-    pub fn try_get_hmac_secret(&self) -> Result<&[u8]> {
-        if self.family == AlgorithmFamily::Hmac {
-            Ok(self.inner())
-        } else {
-            Err(new_error(ErrorKind::InvalidKeyFormat))
-        }
-    }
-}
-
-impl Debug for EncodingKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EncodingKey")
-            .field("family", &self.family)
-            .field("content", &"[redacted]")
-            .finish()
     }
 }
 
@@ -159,18 +123,10 @@ pub fn encode<T: Serialize>(header: &Header, claims: &T, key: &EncodingKey) -> R
     if key.family != header.alg.family() {
         return Err(new_error(ErrorKind::InvalidAlgorithm));
     }
-
-    let signing_provider = (CryptoProvider::get_default().signer_factory)(&header.alg, key)?;
-
-    if signing_provider.algorithm() != header.alg {
-        return Err(new_error(ErrorKind::InvalidAlgorithm));
-    }
-
-    let encoded_header = b64_encode_part(&header)?;
+    let encoded_header = b64_encode_part(header)?;
     let encoded_claims = b64_encode_part(claims)?;
     let message = [encoded_header, encoded_claims].join(".");
-
-    let signature = b64_encode(signing_provider.try_sign(message.as_bytes())?);
+    let signature = crypto::sign(message.as_bytes(), key, header.alg)?;
 
     Ok([message, signature].join("."))
 }

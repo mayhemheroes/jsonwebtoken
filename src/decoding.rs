@@ -1,18 +1,15 @@
-use std::fmt::{Debug, Formatter};
-
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::de::DeserializeOwned;
-use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::algorithms::AlgorithmFamily;
-use crate::crypto::{CryptoProvider, JwtVerifier};
-use crate::errors::{ErrorKind, Result, new_error};
+use crate::crypto::verify;
+use crate::errors::{new_error, ErrorKind, Result};
 use crate::header::Header;
 use crate::jwk::{AlgorithmParameters, Jwk};
 #[cfg(feature = "use_pem")]
 use crate::pem::decoder::PemEncodedKey;
-use crate::serialization::{DecodedJwtPartClaims, b64_decode};
-use crate::validation::{Validation, validate};
+use crate::serialization::{b64_decode, DecodedJwtPartClaims};
+use crate::validation::{validate, Validation};
 
 /// The return type of a successful call to [decode](fn.decode.html).
 #[derive(Debug)]
@@ -44,53 +41,23 @@ macro_rules! expect_two {
     }};
 }
 
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
-/// Different kinds of decoding keys.
-pub enum DecodingKeyKind {
-    /// A raw public key.
+#[derive(Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary, Debug))]
+pub(crate) enum DecodingKeyKind {
     SecretOrDer(Vec<u8>),
-    /// RSA public key components.
-    RsaModulusExponent {
-        /// The modulus of the public key.
-        n: Vec<u8>,
-        /// The exponent of the public key.
-        e: Vec<u8>,
-    },
-}
-
-impl Debug for DecodingKeyKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::SecretOrDer(_) => f.debug_tuple("SecretOrDer").field(&"[redacted]").finish(),
-            Self::RsaModulusExponent { .. } => f
-                .debug_struct("RsaModulusExponent")
-                .field("n", &"[redacted]")
-                .field("e", &"[redacted]")
-                .finish(),
-        }
-    }
+    RsaModulusExponent { n: Vec<u8>, e: Vec<u8> },
 }
 
 /// All the different kind of keys we can use to decode a JWT.
 /// This key can be re-used so make sure you only initialize it once if you can for better performance.
-#[derive(Clone, Debug, ZeroizeOnDrop, Zeroize)]
+#[derive(Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary, Debug))]
 pub struct DecodingKey {
-    #[zeroize(skip)]
-    family: AlgorithmFamily,
-    kind: DecodingKeyKind,
+    pub(crate) family: AlgorithmFamily,
+    pub(crate) kind: DecodingKeyKind,
 }
 
 impl DecodingKey {
-    /// The algorithm family this key is for.
-    pub fn family(&self) -> AlgorithmFamily {
-        self.family
-    }
-
-    /// The kind of decoding key.
-    pub fn kind(&self) -> &DecodingKeyKind {
-        &self.kind
-    }
-
     /// If you're using HMAC, use this.
     pub fn from_secret(secret: &[u8]) -> Self {
         DecodingKey {
@@ -183,7 +150,7 @@ impl DecodingKey {
         }
     }
 
-    /// If you know what you're doing and have a EC DER encoded public key, use this.
+    /// If you know what you're doing and have a RSA EC encoded public key, use this.
     pub fn from_ec_der(der: &[u8]) -> Self {
         DecodingKey {
             family: AlgorithmFamily::Ec,
@@ -218,40 +185,51 @@ impl DecodingKey {
                 DecodingKey::from_ec_components(&params.x, &params.y)
             }
             AlgorithmParameters::OctetKeyPair(params) => DecodingKey::from_ed_components(&params.x),
-            AlgorithmParameters::OctetKey(params) => {
-                let out = b64_decode(&params.value)?;
-                Ok(DecodingKey {
-                    family: AlgorithmFamily::Hmac,
-                    kind: DecodingKeyKind::SecretOrDer(out),
-                })
-            }
+            AlgorithmParameters::OctetKey(params) => DecodingKey::from_base64_secret(&params.value),
         }
     }
 
-    /// Get the value of the key.
-    pub fn as_bytes(&self) -> &[u8] {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
         match &self.kind {
             DecodingKeyKind::SecretOrDer(b) => b,
             DecodingKeyKind::RsaModulusExponent { .. } => unreachable!(),
         }
     }
-
-    /// Try to get the HMAC secret from a key.
-    pub fn try_get_hmac_secret(&self) -> Result<&[u8]> {
-        if self.family == AlgorithmFamily::Hmac {
-            Ok(self.as_bytes())
-        } else {
-            Err(new_error(ErrorKind::InvalidKeyFormat))
-        }
-    }
 }
 
-impl TryFrom<&Jwk> for DecodingKey {
-    type Error = crate::errors::Error;
-
-    fn try_from(jwk: &Jwk) -> Result<Self> {
-        Self::from_jwk(jwk)
+/// Verify signature of a JWT, and return header object and raw payload
+///
+/// If the token or its signature is invalid, it will return an error.
+fn verify_signature<'a>(
+    token: &'a str,
+    key: &DecodingKey,
+    validation: &Validation,
+) -> Result<(Header, &'a str)> {
+    if validation.validate_signature && validation.algorithms.is_empty() {
+        return Err(new_error(ErrorKind::MissingAlgorithm));
     }
+
+    if validation.validate_signature {
+        for alg in &validation.algorithms {
+            if key.family != alg.family() {
+                return Err(new_error(ErrorKind::InvalidAlgorithm));
+            }
+        }
+    }
+
+    let (signature, message) = expect_two!(token.rsplitn(2, '.'));
+    let (payload, header) = expect_two!(message.rsplitn(2, '.'));
+    let header = Header::from_encoded(header)?;
+
+    if validation.validate_signature && !validation.algorithms.contains(&header.alg) {
+        return Err(new_error(ErrorKind::InvalidAlgorithm));
+    }
+
+    if validation.validate_signature && !verify(signature, message.as_bytes(), key, header.alg)? {
+        return Err(new_error(ErrorKind::InvalidSignature));
+    }
+
+    Ok((header, payload))
 }
 
 /// Decode and validate a JWT
@@ -262,7 +240,7 @@ impl TryFrom<&Jwk> for DecodingKey {
 /// use serde::{Deserialize, Serialize};
 /// use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
 ///
-/// #[derive(Debug, Clone, Serialize, Deserialize)]
+/// #[derive(Debug, Serialize, Deserialize)]
 /// struct Claims {
 ///    sub: String,
 ///    company: String
@@ -273,41 +251,20 @@ impl TryFrom<&Jwk> for DecodingKey {
 /// let token_message = decode::<Claims>(&token, &DecodingKey::from_secret("secret".as_ref()), &Validation::new(Algorithm::HS256));
 /// ```
 pub fn decode<T: DeserializeOwned>(
-    token: impl AsRef<[u8]>,
+    token: &str,
     key: &DecodingKey,
     validation: &Validation,
 ) -> Result<TokenData<T>> {
-    let token = token.as_ref();
-    let header = decode_header(token)?;
+    match verify_signature(token, key, validation) {
+        Err(e) => Err(e),
+        Ok((header, claims)) => {
+            let decoded_claims = DecodedJwtPartClaims::from_jwt_part_claims(claims)?;
+            let claims = decoded_claims.deserialize()?;
+            validate(decoded_claims.deserialize()?, validation)?;
 
-    if validation.validate_signature && !validation.algorithms.contains(&header.alg) {
-        return Err(new_error(ErrorKind::InvalidAlgorithm));
+            Ok(TokenData { header, claims })
+        }
     }
-
-    let verifying_provider = (CryptoProvider::get_default().verifier_factory)(&header.alg, key)?;
-
-    let (header, claims) = verify_signature(token, validation, verifying_provider)?;
-
-    let decoded_claims = DecodedJwtPartClaims::from_jwt_part_claims(claims)?;
-    let claims = decoded_claims.deserialize()?;
-    validate(decoded_claims.deserialize()?, validation)?;
-
-    Ok(TokenData { header, claims })
-}
-
-/// Decode a JWT with NO VALIDATION
-///
-/// DANGER: This performs zero validation on the JWT
-pub fn insecure_decode<T: DeserializeOwned>(token: impl AsRef<[u8]>) -> Result<TokenData<T>> {
-    let token = token.as_ref();
-
-    let (_, message) = expect_two!(token.rsplitn(2, |b| *b == b'.'));
-    let (payload, header) = expect_two!(message.rsplitn(2, |b| *b == b'.'));
-
-    let header = Header::from_encoded(header)?;
-    let claims = DecodedJwtPartClaims::from_jwt_part_claims(payload)?.deserialize()?;
-
-    Ok(TokenData { header, claims })
 }
 
 /// Decode a JWT without any signature verification/validations and return its [Header](struct.Header.html).
@@ -320,57 +277,8 @@ pub fn insecure_decode<T: DeserializeOwned>(token: impl AsRef<[u8]>) -> Result<T
 /// let token = "a.jwt.token".to_string();
 /// let header = decode_header(&token);
 /// ```
-pub fn decode_header(token: impl AsRef<[u8]>) -> Result<Header> {
-    let token = token.as_ref();
-    let (_, message) = expect_two!(token.rsplitn(2, |b| *b == b'.'));
-    let (_, header) = expect_two!(message.rsplitn(2, |b| *b == b'.'));
+pub fn decode_header(token: &str) -> Result<Header> {
+    let (_, message) = expect_two!(token.rsplitn(2, '.'));
+    let (_, header) = expect_two!(message.rsplitn(2, '.'));
     Header::from_encoded(header)
-}
-
-pub(crate) fn verify_signature_body(
-    message: &[u8],
-    signature: &[u8],
-    header: &Header,
-    validation: &Validation,
-    verifying_provider: Box<dyn JwtVerifier>,
-) -> Result<()> {
-    if validation.validate_signature && validation.algorithms.is_empty() {
-        return Err(new_error(ErrorKind::MissingAlgorithm));
-    }
-
-    if validation.validate_signature {
-        for alg in &validation.algorithms {
-            if verifying_provider.algorithm().family() != alg.family() {
-                return Err(new_error(ErrorKind::InvalidAlgorithm));
-            }
-        }
-    }
-
-    if validation.validate_signature && !validation.algorithms.contains(&header.alg) {
-        return Err(new_error(ErrorKind::InvalidAlgorithm));
-    }
-
-    if validation.validate_signature
-        && verifying_provider.verify(message, &b64_decode(signature)?).is_err()
-    {
-        return Err(new_error(ErrorKind::InvalidSignature));
-    }
-
-    Ok(())
-}
-
-/// Verify the signature of a JWT, and return a header object and raw payload.
-///
-/// If the token or its signature is invalid, it will return an error.
-fn verify_signature<'a>(
-    token: &'a [u8],
-    validation: &Validation,
-    verifying_provider: Box<dyn JwtVerifier>,
-) -> Result<(Header, &'a [u8])> {
-    let (signature, message) = expect_two!(token.rsplitn(2, |b| *b == b'.'));
-    let (payload, header) = expect_two!(message.rsplitn(2, |b| *b == b'.'));
-    let header = Header::from_encoded(header)?;
-    verify_signature_body(message, signature, &header, validation, verifying_provider)?;
-
-    Ok((header, payload))
 }
