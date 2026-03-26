@@ -48,14 +48,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Start analysis for ROUNDTRIP
-        uses: ForAllSecure/mcode-action@v1
+        uses: ForAllSecure/mcode-action@long-runs
         with:
           mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
           args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.ROUNDTRIP }} --duration 600
           sarif-output: sarif
 
       - name: Start analysis for DECODE
-        uses: ForAllSecure/mcode-action@v1
+        uses: ForAllSecure/mcode-action@long-runs
         with:
           mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
           args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.DECODE }} --duration 600
