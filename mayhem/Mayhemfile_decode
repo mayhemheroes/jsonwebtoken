@@ -1,0 +1,14 @@
+# Ported from the pre-two-branch integration (archive/original-master:
+# decode.mayhemfile). Same target name and code path (decode a hostile token).
+project: jsonwebtoken
+target: decode
+
+cmds:
+  # libFuzzer binary; Mayhem feeds inputs on stdin (no @@ = stdin input).
+  - cmd: /mayhem/decode
+    libfuzzer: true
+
+testsuite:
+  - https://$MAYHEM_DOMAIN/$MAYHEM_PROJECT/$MAYHEM_TARGET/testsuite.tar
+  - file://mayhem/decode/testsuite
+

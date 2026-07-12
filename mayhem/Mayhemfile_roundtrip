@@ -1,0 +1,9 @@
+# Ported from the pre-two-branch integration (archive/original-master:
+# roundtrip.mayhemfile). Same target name and property (encode/decode round-trip).
+project: jsonwebtoken
+target: roundtrip
+
+cmds:
+  # libFuzzer binary; Mayhem feeds inputs on stdin (no @@ = stdin input).
+  - cmd: /mayhem/roundtrip
+    libfuzzer: true
