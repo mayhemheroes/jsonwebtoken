@@ -1,6 +1,6 @@
 # Changelog
 
-## 11.0.0 (unreleased)
+## 11.0.0 (2026-07-24)
 
 - Add conversions between `Algorithm` and `KeyAlgorithm`
 - JWKs can now be created from `DecodingKey`s, creation from `EncodingKey` and `DecodingKey` now supports Ed25519 as well
